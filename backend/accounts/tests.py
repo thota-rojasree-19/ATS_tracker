@@ -1,14 +1,148 @@
 from datetime import timedelta
+from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ImproperlyConfigured
 from django.urls import reverse
+from django.test import SimpleTestCase, override_settings
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
-from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 
 from accounts.models import UserInvitation
+from config.settings import parse_origin_list
 
 User = get_user_model()
+
+VERCEL_PREVIEW_ORIGIN = (
+    'https://ats-tracker-7voz-gx1kppy1r-thota-rojasrees-projects.vercel.app'
+)
+
+
+class CORSConfigurationTests(SimpleTestCase):
+    def test_credentials_are_enabled_without_allowing_all_origins(self):
+        self.assertTrue(settings.CORS_ALLOW_CREDENTIALS)
+        self.assertFalse(settings.CORS_ALLOW_ALL_ORIGINS)
+        self.assertIn(settings.PRODUCTION_FRONTEND_ORIGIN, settings.CORS_ALLOWED_ORIGINS)
+        self.assertIn(settings.PRODUCTION_FRONTEND_ORIGIN, settings.CSRF_TRUSTED_ORIGINS)
+
+    def test_cors_middleware_runs_before_common_middleware(self):
+        self.assertLess(
+            settings.MIDDLEWARE.index('corsheaders.middleware.CorsMiddleware'),
+            settings.MIDDLEWARE.index('django.middleware.common.CommonMiddleware'),
+        )
+
+    def test_origin_list_accepts_comma_and_whitespace_separated_origins(self):
+        self.assertEqual(
+            parse_origin_list(
+                ' https://one.example, https://two.example/ \nhttp://localhost:5173 '
+            ),
+            [
+                'https://one.example',
+                'https://two.example',
+                'http://localhost:5173',
+            ],
+        )
+
+    def test_origin_list_rejects_paths_and_wildcards(self):
+        for invalid_origin in ('https://example.com/path', '*', 'https://*.example.com'):
+            with self.subTest(origin=invalid_origin):
+                with self.assertRaises(ImproperlyConfigured):
+                    parse_origin_list(invalid_origin)
+
+    @override_settings(
+        CORS_ALLOWED_ORIGINS=['https://ats-tracker-7voz.vercel.app'],
+        CORS_ALLOWED_ORIGIN_REGEXES=[settings.VERCEL_PREVIEW_ORIGIN_REGEX],
+        CORS_ALLOW_ALL_ORIGINS=False,
+        CORS_ALLOW_CREDENTIALS=True,
+    )
+    def test_production_and_project_preview_origins_are_allowed(self):
+        for origin in ('https://ats-tracker-7voz.vercel.app', VERCEL_PREVIEW_ORIGIN):
+            with self.subTest(origin=origin):
+                response = self.client.get(
+                    reverse('auth-register'),
+                    HTTP_ORIGIN=origin,
+                )
+                self.assertEqual(
+                    response.headers.get('Access-Control-Allow-Origin'),
+                    origin,
+                )
+                self.assertEqual(
+                    response.headers.get('Access-Control-Allow-Credentials'),
+                    'true',
+                )
+
+    @override_settings(
+        CORS_ALLOWED_ORIGINS=['https://ats-tracker-7voz.vercel.app'],
+        CORS_ALLOWED_ORIGIN_REGEXES=[settings.VERCEL_PREVIEW_ORIGIN_REGEX],
+        CORS_ALLOW_ALL_ORIGINS=False,
+        CORS_ALLOW_CREDENTIALS=True,
+    )
+    def test_unrelated_vercel_origin_is_not_allowed(self):
+        response = self.client.get(
+            reverse('auth-register'),
+            HTTP_ORIGIN='https://unrelated-project-abc-thota-rojasrees-projects.vercel.app',
+        )
+        self.assertNotIn('Access-Control-Allow-Origin', response.headers)
+
+    @override_settings(
+        CORS_ALLOWED_ORIGINS=['https://ats-tracker-7voz.vercel.app'],
+        CORS_ALLOWED_ORIGIN_REGEXES=[settings.VERCEL_PREVIEW_ORIGIN_REGEX],
+        CORS_ALLOW_ALL_ORIGINS=False,
+        CORS_ALLOW_CREDENTIALS=True,
+    )
+    def test_registration_preflight_rejects_unrelated_origin(self):
+        response = self.client.options(
+            reverse('auth-register'),
+            HTTP_ORIGIN='https://unrelated-project-abc-thota-rojasrees-projects.vercel.app',
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD='POST',
+            HTTP_ACCESS_CONTROL_REQUEST_HEADERS='content-type',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertNotIn('Access-Control-Allow-Origin', response.headers)
+
+    @override_settings(
+        CORS_ALLOWED_ORIGINS=['https://ats-tracker-7voz.vercel.app'],
+        CORS_ALLOWED_ORIGIN_REGEXES=[settings.VERCEL_PREVIEW_ORIGIN_REGEX],
+        CORS_ALLOW_ALL_ORIGINS=False,
+        CORS_ALLOW_CREDENTIALS=True,
+    )
+    def test_registration_preflight_allows_preview_origin(self):
+        response = self.client.options(
+            reverse('auth-register'),
+            HTTP_ORIGIN=VERCEL_PREVIEW_ORIGIN,
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD='POST',
+            HTTP_ACCESS_CONTROL_REQUEST_HEADERS='content-type',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.headers.get('Access-Control-Allow-Origin'),
+            VERCEL_PREVIEW_ORIGIN,
+        )
+        self.assertEqual(
+            response.headers.get('Access-Control-Allow-Credentials'),
+            'true',
+        )
+        self.assertIn('POST', response.headers.get('Access-Control-Allow-Methods', ''))
+
+    @override_settings(
+        CORS_ALLOWED_ORIGINS=['https://ats-tracker-7voz.vercel.app'],
+        CORS_ALLOWED_ORIGIN_REGEXES=[settings.VERCEL_PREVIEW_ORIGIN_REGEX],
+        CORS_ALLOW_ALL_ORIGINS=False,
+        CORS_ALLOW_CREDENTIALS=True,
+    )
+    def test_registration_validation_response_includes_preview_cors_headers(self):
+        response = self.client.post(
+            reverse('auth-register'),
+            data={},
+            content_type='application/json',
+            HTTP_ORIGIN=VERCEL_PREVIEW_ORIGIN,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.headers.get('Access-Control-Allow-Origin'),
+            VERCEL_PREVIEW_ORIGIN,
+        )
 
 
 class AuthenticationAPITests(APITestCase):
@@ -265,6 +399,30 @@ class AuthenticationAPITests(APITestCase):
         self.client.credentials()
         resp = self.client.get(self.me_url)
         self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_expired_access_token_is_logged_without_exposing_token(self):
+        token = AccessToken.for_user(self.approved_recruiter)
+        token['exp'] = int(timezone.now().timestamp()) - 60
+        raw_token = str(token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {raw_token}')
+
+        with self.assertLogs('accounts.authentication', level='WARNING') as captured:
+            response = self.client.get(self.me_url)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertTrue(any('reason=expired_token' in line for line in captured.output))
+        self.assertNotIn(raw_token, '\n'.join(captured.output))
+
+    def test_invalid_access_token_is_logged_without_exposing_token(self):
+        raw_token = 'not-a-valid-jwt'
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {raw_token}')
+
+        with self.assertLogs('accounts.authentication', level='WARNING') as captured:
+            response = self.client.get(self.me_url)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertTrue(any('reason=invalid_token' in line for line in captured.output))
+        self.assertNotIn(raw_token, '\n'.join(captured.output))
 
     def test_logout(self):
         refresh = RefreshToken.for_user(self.approved_recruiter)

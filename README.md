@@ -101,21 +101,24 @@ Configure the Render service with the `backend` directory as its root and use:
 
 - Build command: `pip install -r requirements.txt && python manage.py collectstatic --noinput`
 - Start command: `gunicorn config.wsgi:application`
+- Confirm the service's connected repository and deploy branch include the commit being released.
 - Environment variables:
   - `DEBUG=False`
   - `SECRET_KEY` set to a newly generated private value
   - `JWT_SECRET_KEY` set to a separate private signing value
   - `ALLOWED_HOSTS=earlyjobs-ats-backend.onrender.com`
   - `DATABASE_URL` set to the existing Neon PostgreSQL connection string
-  - `CORS_ALLOWED_ORIGINS=https://ats-tracker-7voz.vercel.app`
-  - `CSRF_TRUSTED_ORIGINS=https://ats-tracker-7voz.vercel.app`
+  - `CORS_ALLOWED_ORIGINS=https://ats-tracker-7voz.vercel.app` (comma-separated list if additional exact origins are needed)
+  - `CSRF_TRUSTED_ORIGINS=https://ats-tracker-7voz.vercel.app` (add an exact preview origin only when cookie-authenticated unsafe requests need it)
   - `AUTH_COOKIE_SECURE=True`
+
+The backend also allows Vercel preview hosts matching only this project's `ats-tracker-*-thota-rojasrees-projects.vercel.app` deployment pattern. Other origins are not allowed, and wildcard CORS is disabled. Do not set `CORS_ALLOW_ALL_ORIGINS`.
 
 Run `python manage.py migrate` as a Render pre-deploy command when deploying new migrations. Do not replace the Neon database or run destructive database commands. If introducing or changing `JWT_SECRET_KEY`, existing sessions will need to sign in again.
 
 ### Vercel (React frontend)
 
-Set the Vercel project root directory to `frontend` and configure this environment variable for the Production environment:
+Set the Vercel project root directory to `frontend`, confirm its Production Branch includes the commit being released, and configure this environment variable for the Production environment:
 
 ```text
 VITE_API_BASE_URL=https://earlyjobs-ats-backend.onrender.com/api

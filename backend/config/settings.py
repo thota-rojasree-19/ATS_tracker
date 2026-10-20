@@ -11,10 +11,14 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
-from pathlib import Path
 import os
+import re
 from datetime import timedelta
+from pathlib import Path
+from urllib.parse import urlsplit
+
 import dj_database_url
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -57,9 +61,9 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -155,30 +159,62 @@ USE_TZ = True
 
 
 PRODUCTION_FRONTEND_ORIGIN = 'https://ats-tracker-7voz.vercel.app'
+
+
+def parse_origin_list(value):
+    origins = []
+    for origin in re.split(r'[\s,]+', value.strip()):
+        if not origin:
+            continue
+        try:
+            parsed = urlsplit(origin)
+            port = parsed.port
+        except ValueError as exc:
+            raise ImproperlyConfigured(
+                'CORS and CSRF origins must contain valid HTTP(S) origins.'
+            ) from exc
+        if (
+            parsed.scheme not in ('http', 'https')
+            or not parsed.netloc
+            or not parsed.hostname
+            or (port is not None and not 0 < port < 65536)
+            or '*' in origin
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in ('', '/')
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ImproperlyConfigured(
+                'CORS and CSRF origins must be HTTP(S) origins without paths, '
+                'credentials, queries, or fragments.'
+            )
+        normalized = f'{parsed.scheme}://{parsed.netloc}'
+        if normalized not in origins:
+            origins.append(normalized)
+    return origins
+
+
+VERCEL_PREVIEW_ORIGIN_REGEX = (
+    r'^https://ats-tracker-[a-z0-9-]+-thota-rojasrees-projects\.vercel\.app$'
+)
 CORS_ALLOWED_ORIGINS = list(dict.fromkeys([
     PRODUCTION_FRONTEND_ORIGIN,
-    *[
-        origin.strip()
-        for origin in os.environ.get(
-            'CORS_ALLOWED_ORIGINS',
-            'http://localhost:5173,http://127.0.0.1:5173',
-        ).split(',')
-        if origin.strip()
-    ],
+    *parse_origin_list(os.environ.get(
+        'CORS_ALLOWED_ORIGINS',
+        'http://localhost:5173,http://127.0.0.1:5173',
+    )),
 ]))
-CORS_ALLOW_ALL_ORIGINS = os.environ.get('CORS_ALLOW_ALL_ORIGINS', 'False').lower() in ('true', '1', 'yes')
+CORS_ALLOWED_ORIGIN_REGEXES = [VERCEL_PREVIEW_ORIGIN_REGEX]
+CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
 
 CSRF_TRUSTED_ORIGINS = list(dict.fromkeys([
     PRODUCTION_FRONTEND_ORIGIN,
-    *[
-        origin.strip()
-        for origin in os.environ.get(
-            'CSRF_TRUSTED_ORIGINS',
-            'http://localhost:5173,http://127.0.0.1:5173',
-        ).split(',')
-        if origin.strip()
-    ],
+    *parse_origin_list(os.environ.get(
+        'CSRF_TRUSTED_ORIGINS',
+        'http://localhost:5173,http://127.0.0.1:5173',
+    )),
 ]))
 
 # Security headers & cookies
@@ -232,8 +268,9 @@ REST_FRAMEWORK = {
 AUTH_USER_MODEL = 'accounts.User'
 
 # JWT configuration (Simple JWT)
+JWT_SIGNING_KEY_SOURCE = 'JWT_SECRET_KEY' if os.environ.get('JWT_SECRET_KEY') else 'SECRET_KEY'
 SIMPLE_JWT = {
-    'SIGNING_KEY': os.environ.get('JWT_SECRET_KEY', SECRET_KEY),
+    'SIGNING_KEY': os.environ.get('JWT_SECRET_KEY') or SECRET_KEY,
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=int(os.environ.get('JWT_ACCESS_TOKEN_LIFETIME_MINUTES', 15))),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=int(os.environ.get('JWT_REFRESH_TOKEN_LIFETIME_DAYS', 7))),
     'ROTATE_REFRESH_TOKENS': True,
