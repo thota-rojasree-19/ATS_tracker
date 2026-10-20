@@ -1,19 +1,38 @@
 import axios from 'axios'
 
+const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL ||
+  (import.meta.env.PROD
+    ? 'https://earlyjobs-ats-backend.onrender.com/api'
+    : 'http://localhost:8000/api')
+).replace(/\/+$/, '')
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api',
+  baseURL: API_BASE_URL,
+  timeout: 15000,
   headers: {
     'Content-Type': 'application/json',
   },
   withCredentials: true,
 })
 
+const clearStoredSession = () => {
+  sessionStorage.removeItem('earlyjobs_token')
+  sessionStorage.removeItem('earlyjobs_refresh')
+  sessionStorage.removeItem('earlyjobs_user')
+  delete api.defaults.headers.common.Authorization
+  window.dispatchEvent(new Event('auth:unauthorized'))
+}
+
 // Attach Bearer token from sessionStorage or memory if available
 api.interceptors.request.use(
   (config) => {
     const token = sessionStorage.getItem('earlyjobs_token')
-    if (token && !config.headers.Authorization) {
+    if (token) {
       config.headers.Authorization = `Bearer ${token}`
+    }
+    if (!token) {
+      delete config.headers.Authorization
     }
     return config
   },
@@ -46,6 +65,10 @@ api.interceptors.response.use(
       return Promise.reject(error)
     }
 
+    if (!originalRequest) {
+      return Promise.reject(error)
+    }
+
     if (
       error.response?.status === 401 &&
       !originalRequest._retry &&
@@ -66,19 +89,30 @@ api.interceptors.response.use(
           .catch((err) => Promise.reject(err))
       }
 
+      const refreshToken = sessionStorage.getItem('earlyjobs_refresh')
+      if (!refreshToken) {
+        const sessionError = new Error('Your session has expired. Please sign in again.')
+        processQueue(sessionError, null)
+        clearStoredSession()
+        return Promise.reject(sessionError)
+      }
+
       originalRequest._retry = true
       isRefreshing = true
 
       try {
-        const refreshToken = sessionStorage.getItem('earlyjobs_refresh')
         const refreshResponse = await axios.post(
-          `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'}/auth/refresh/`,
-          refreshToken ? { refresh: refreshToken } : {},
-          { withCredentials: true }
+          `${API_BASE_URL}/auth/refresh/`,
+          { refresh: refreshToken },
+          { withCredentials: true, timeout: 15000 }
         )
 
         const newAccess = refreshResponse.data?.access
         const newRefresh = refreshResponse.data?.refresh
+        if (!newAccess) {
+          throw new Error('Token refresh did not return an access token.')
+        }
+
         if (newAccess) {
           sessionStorage.setItem('earlyjobs_token', newAccess)
           if (newRefresh) {
@@ -91,10 +125,7 @@ api.interceptors.response.use(
         }
       } catch (refreshErr) {
         processQueue(refreshErr, null)
-        sessionStorage.removeItem('earlyjobs_token')
-        sessionStorage.removeItem('earlyjobs_refresh')
-        sessionStorage.removeItem('earlyjobs_user')
-        window.dispatchEvent(new Event('auth:unauthorized'))
+        clearStoredSession()
         return Promise.reject(refreshErr)
       } finally {
         isRefreshing = false

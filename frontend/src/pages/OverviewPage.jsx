@@ -58,9 +58,11 @@ export default function OverviewPage() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [toastMessage, setToastMessage] = useState(null)
+  const [error, setError] = useState(null)
 
   const fetchData = async (isManualRefresh = false) => {
     try {
+      setError(null)
       if (isManualRefresh) setRefreshing(true)
       else setLoading(true)
 
@@ -70,7 +72,18 @@ export default function OverviewPage() {
         setToastMessage({ type: 'success', text: 'Dashboard metrics refreshed' })
       }
     } catch (e) {
-      setToastMessage({ type: 'error', text: 'Failed to load dashboard data' })
+      const detail = e.response?.data?.detail
+      const message =
+        typeof detail === 'string'
+          ? detail
+          : e.code === 'ECONNABORTED'
+            ? 'The dashboard request timed out. Check your connection and retry.'
+            : 'Unable to load dashboard data. Please sign in again or retry.'
+      if (isManualRefresh && data) {
+        setToastMessage({ type: 'error', text: message })
+      } else {
+        setError(message)
+      }
     } finally {
       setLoading(false)
       setRefreshing(false)
@@ -101,6 +114,18 @@ export default function OverviewPage() {
           <LoadingSkeleton className="h-80" />
         </div>
         <LoadingSkeleton className="h-64" />
+      </div>
+    )
+  }
+
+  if (error && !data) {
+    return (
+      <div className="rounded-2xl border border-rose-200 bg-white p-8 text-center shadow-card">
+        <h1 className="text-xl font-bold text-slate-900">Dashboard unavailable</h1>
+        <p className="mt-2 text-sm text-slate-600">{error}</p>
+        <Button variant="primary" className="mt-5" onClick={() => fetchData()}>
+          Retry
+        </Button>
       </div>
     )
   }
@@ -292,4 +317,3 @@ export default function OverviewPage() {
     </div>
   )
 }
-

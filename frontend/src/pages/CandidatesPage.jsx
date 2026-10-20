@@ -61,6 +61,31 @@ const AVATAR_COLORS = [
   'bg-rose-100 text-rose-700',
 ]
 
+function getRequestErrorMessage(error, fallback) {
+  const responseData = error?.response?.data
+  if (responseData && typeof responseData === 'object') {
+    const messages = Object.entries(responseData).flatMap(([field, value]) => {
+      const values = Array.isArray(value) ? value : [value]
+      return values
+        .filter((message) => typeof message === 'string')
+        .map((message) => (
+          field === 'detail'
+            ? message
+            : `${field.replace(/_/g, ' ')}: ${message}`
+        ))
+    })
+    if (messages.length) return messages.join(' ')
+  }
+
+  if (error?.code === 'ECONNABORTED') {
+    return 'The request timed out. Check your connection and retry.'
+  }
+  if (!error?.response) {
+    return 'Unable to reach the server. Check your connection and try again.'
+  }
+  return fallback
+}
+
 function getAvatarColor(name) {
   let hash = 0
   for (let i = 0; i < (name || '').length; i++) {
@@ -109,7 +134,10 @@ export default function CandidatesPage() {
         previous: res.data.previous,
       })
     } catch (e) {
-      setToast({ type: 'error', message: 'Failed to load candidates.' })
+      setToast({
+        type: 'error',
+        message: getRequestErrorMessage(e, 'Failed to load candidates.'),
+      })
     } finally {
       setLoading(false)
     }
@@ -178,12 +206,13 @@ export default function CandidatesPage() {
       setModalOpen(false)
       fetchData()
     } catch (e) {
-      const errorDetail =
-        e?.response?.data?.email?.[0] ||
-        e?.response?.data?.applied_role?.[0] ||
-        e?.response?.data?.detail ||
-        'Failed to save candidate. Please check fields.'
-      setToast({ type: 'error', message: errorDetail })
+      setToast({
+        type: 'error',
+        message: getRequestErrorMessage(
+          e,
+          'Failed to save candidate. Please check the submitted fields.'
+        ),
+      })
     } finally {
       setSubmitting(false)
     }
@@ -626,4 +655,3 @@ export default function CandidatesPage() {
     </div>
   )
 }
-

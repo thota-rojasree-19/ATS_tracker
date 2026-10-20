@@ -224,6 +224,25 @@ class AuthenticationAPITests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(resp.data.get('code'), 'user_inactive')
 
+    def test_login_with_unverified_account_does_not_issue_tokens(self):
+        unverified = User.objects.create_user(
+            email='unverified@earlyjobs.in',
+            password='ValidPassword123!',
+            full_name='Unverified User',
+            is_email_verified=False,
+            approval_status=User.APPROVAL_APPROVED,
+            is_approved=True,
+        )
+        resp = self.client.post(
+            self.login_url,
+            {'email': unverified.email, 'password': 'ValidPassword123!'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(resp.data.get('code'), 'email_not_verified')
+        self.assertNotIn('access', resp.data)
+        self.assertNotIn('refresh', resp.data)
+
     def test_administrator_login(self):
         resp = self.client.post(
             self.login_url,
@@ -519,4 +538,3 @@ class AdminDashboardAndApprovalAPITests(APITestCase):
         resp = self.client.patch(role_url, {'role': 'RECRUITER'}, format='json')
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(resp.data.get('code'), 'cannot_demote_self')
-

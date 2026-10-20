@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 from rest_framework import status
@@ -367,6 +368,40 @@ class DashboardTests(APITestCase):
         self.assertEqual(r.data['interviews'], 1)
         self.assertEqual(r.data['hired'], 1)
         self.assertEqual(r.data['rejected'], 1)
+
+    def test_login_token_supports_candidate_and_dashboard_workflow(self):
+        login_response = self.client.post(
+            reverse('auth-login'),
+            {'email': self.user.email, 'password': 'Password123!'},
+            format='json',
+        )
+        self.assertEqual(login_response.status_code, status.HTTP_200_OK)
+        self.assertIn('access', login_response.data)
+        self.assertIn('refresh', login_response.data)
+
+        auth_scheme = settings.SIMPLE_JWT['AUTH_HEADER_TYPES'][0]
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f'{auth_scheme} {login_response.data["access"]}'
+        )
+        create_response = self.client.post(
+            reverse('candidate-list'),
+            {
+                'full_name': 'Authenticated Candidate',
+                'email': 'authenticated@example.com',
+                'applied_role': 'Full Stack Developer',
+                'stage': 'APPLIED',
+            },
+            format='json',
+        )
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Candidate.objects.count(), 1)
+
+        list_response = self.client.get(reverse('candidate-list'))
+        dashboard_response = self.client.get(self.dashboard_url)
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(list_response.data['count'], 1)
+        self.assertEqual(dashboard_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(dashboard_response.data['total_candidates'], 1)
 
 
 class HealthTests(APITestCase):

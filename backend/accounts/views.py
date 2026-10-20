@@ -180,6 +180,15 @@ class LoginView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
+        if not user.is_email_verified:
+            return Response(
+                {
+                    'error': 'Please verify your email address before signing in.',
+                    'code': 'email_not_verified',
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         # Check approval
         if user.approval_status == User.APPROVAL_REJECTED:
             return Response(

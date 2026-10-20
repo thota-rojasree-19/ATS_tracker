@@ -154,11 +154,32 @@ USE_I18N = True
 USE_TZ = True
 
 
-CORS_ALLOWED_ORIGINS = [origin.strip() for origin in os.environ.get('CORS_ALLOWED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173').split(',') if origin.strip()]
+PRODUCTION_FRONTEND_ORIGIN = 'https://ats-tracker-7voz.vercel.app'
+CORS_ALLOWED_ORIGINS = list(dict.fromkeys([
+    PRODUCTION_FRONTEND_ORIGIN,
+    *[
+        origin.strip()
+        for origin in os.environ.get(
+            'CORS_ALLOWED_ORIGINS',
+            'http://localhost:5173,http://127.0.0.1:5173',
+        ).split(',')
+        if origin.strip()
+    ],
+]))
 CORS_ALLOW_ALL_ORIGINS = os.environ.get('CORS_ALLOW_ALL_ORIGINS', 'False').lower() in ('true', '1', 'yes')
 CORS_ALLOW_CREDENTIALS = True
 
-CSRF_TRUSTED_ORIGINS = [origin.strip() for origin in os.environ.get('CSRF_TRUSTED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173').split(',') if origin.strip()]
+CSRF_TRUSTED_ORIGINS = list(dict.fromkeys([
+    PRODUCTION_FRONTEND_ORIGIN,
+    *[
+        origin.strip()
+        for origin in os.environ.get(
+            'CSRF_TRUSTED_ORIGINS',
+            'http://localhost:5173,http://127.0.0.1:5173',
+        ).split(',')
+        if origin.strip()
+    ],
+]))
 
 # Security headers & cookies
 SESSION_COOKIE_SECURE = os.environ.get('SESSION_COOKIE_SECURE', 'False').lower() in ('true', '1', 'yes')
@@ -212,6 +233,7 @@ AUTH_USER_MODEL = 'accounts.User'
 
 # JWT configuration (Simple JWT)
 SIMPLE_JWT = {
+    'SIGNING_KEY': os.environ.get('JWT_SECRET_KEY', SECRET_KEY),
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=int(os.environ.get('JWT_ACCESS_TOKEN_LIFETIME_MINUTES', 15))),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=int(os.environ.get('JWT_REFRESH_TOKEN_LIFETIME_DAYS', 7))),
     'ROTATE_REFRESH_TOKENS': True,
