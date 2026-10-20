@@ -15,7 +15,7 @@ class UserManager(BaseUserManager):
 
     def _create_user(self, email, password=None, **extra_fields):
         if not email:
-            raise ValueError('A valid @earlyjobs.in email address must be provided.')
+            raise ValueError('A valid company email address must be provided.')
         normalized_email = validate_company_email(email)
         full_name = (extra_fields.pop('full_name', '') or '').strip()
         if not full_name:

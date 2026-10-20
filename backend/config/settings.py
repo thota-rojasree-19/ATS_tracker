@@ -15,23 +15,27 @@ from pathlib import Path
 import os
 from datetime import timedelta
 import dj_database_url
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load local environment variables from backend/.env if present
+load_dotenv(BASE_DIR / '.env')
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-g3@o4ge4%i%8_vhl8-ex^p+(1g=m+sn1*0lcl&jtc4fm0n^os)'
+SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-g3@o4ge4%i%8_vhl8-ex^p+(1g=m+sn1*0lcl&jtc4fm0n^os)')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DEBUG', 'True').lower() in ('true', '1', 'yes')
 import sys
 TESTING = 'test' in sys.argv
 
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+ALLOWED_HOSTS = [host.strip() for host in os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if host.strip()]
 
 
 # Application definition
@@ -86,10 +90,23 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-DATABASE_URL = os.environ.get('DATABASE_URL')
-if DATABASE_URL:
+DATABASE_URL = os.environ.get('DATABASE_URL', '').strip()
+if TESTING and os.environ.get('TEST_ON_POSTGRES', '').lower() not in ('true', '1', 'yes'):
     DATABASES = {
-        'default': dj_database_url.parse(DATABASE_URL, conn_max_age=600)
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': ':memory:',
+        }
+    }
+elif DATABASE_URL:
+    is_local_db = 'localhost' in DATABASE_URL or '127.0.0.1' in DATABASE_URL
+    is_pooler = '-pooler' in DATABASE_URL
+    DATABASES = {
+        'default': dj_database_url.parse(
+            DATABASE_URL,
+            conn_max_age=0 if is_pooler else 600,
+            ssl_require=False if is_local_db else True,
+        )
     }
 else:
     DATABASES = {
@@ -119,6 +136,11 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+if TESTING:
+    PASSWORD_HASHERS = [
+        'django.contrib.auth.hashers.MD5PasswordHasher',
+    ]
+
 
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/
@@ -134,11 +156,22 @@ USE_TZ = True
 
 CORS_ALLOWED_ORIGINS = [origin.strip() for origin in os.environ.get('CORS_ALLOWED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173').split(',') if origin.strip()]
 CORS_ALLOW_ALL_ORIGINS = os.environ.get('CORS_ALLOW_ALL_ORIGINS', 'False').lower() in ('true', '1', 'yes')
+CORS_ALLOW_CREDENTIALS = True
+
+CSRF_TRUSTED_ORIGINS = [origin.strip() for origin in os.environ.get('CSRF_TRUSTED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173').split(',') if origin.strip()]
+
+# Security headers & cookies
+SESSION_COOKIE_SECURE = os.environ.get('SESSION_COOKIE_SECURE', 'False').lower() in ('true', '1', 'yes')
+CSRF_COOKIE_SECURE = os.environ.get('CSRF_COOKIE_SECURE', 'False').lower() in ('true', '1', 'yes')
+SECURE_BROWSER_XSS_FILTER = True
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = 'DENY'
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
@@ -157,21 +190,17 @@ REST_FRAMEWORK = {
         'accounts.authentication.CookieOrHeaderJWTAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
-        'rest_framework.permissions.AllowAny',
+        'accounts.permissions.IsVerifiedAndApprovedUser',
     ),
     'DEFAULT_THROTTLE_CLASSES': () if TESTING else (
         'rest_framework.throttling.UserRateThrottle',
         'rest_framework.throttling.AnonRateThrottle',
-        'accounts.throttles.OTPRequestRateThrottle',
-        'accounts.throttles.OTPVerifyRateThrottle',
-        'accounts.throttles.LoginRateThrottle',
     ),
     'DEFAULT_THROTTLE_RATES': {
-        'user': os.environ.get('THROTTLE_USER_RATE', '1000/day'),
-        'anon': os.environ.get('THROTTLE_ANON_RATE', '10000/day'),
-        'otp_request': os.environ.get('THROTTLE_OTP_REQUEST_RATE', '5/hour'),
-        'otp_verify': os.environ.get('THROTTLE_OTP_VERIFY_RATE', '10/hour'),
-        'auth_login': os.environ.get('THROTTLE_AUTH_LOGIN_RATE', '10/hour'),
+        'user': os.environ.get('THROTTLE_USER_RATE', '5000/hour' if DEBUG else '1000/day'),
+        'anon': os.environ.get('THROTTLE_ANON_RATE', '2000/hour' if DEBUG else '500/hour'),
+        'auth_register': os.environ.get('THROTTLE_AUTH_REGISTER_RATE', '30/hour'),
+        'auth_login': os.environ.get('THROTTLE_AUTH_LOGIN_RATE', '60/hour' if DEBUG else '20/hour'),
     },
     'DEFAULT_RENDERER_CLASSES': (
         'rest_framework.renderers.JSONRenderer',
@@ -201,7 +230,7 @@ SIMPLE_JWT = {
 }
 
 # Company email restriction
-ALLOWED_EMAIL_DOMAIN = os.environ.get('ALLOWED_EMAIL_DOMAIN', 'earlyjobs.in')
+ALLOWED_EMAIL_DOMAIN = os.environ.get('ALLOWED_EMAIL_DOMAIN', 'earlyjobs.in,admin.com')
 
 # OTP policy
 OTP_EXPIRY_MINUTES = int(os.environ.get('OTP_EXPIRY_MINUTES', 10))
