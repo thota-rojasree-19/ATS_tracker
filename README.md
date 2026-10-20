@@ -93,7 +93,37 @@ earlyjobs-ats/
 3. Access frontend at `http://localhost:5173`
 4. Access backend API at `http://localhost:8000`
 
+## Production Deployment
+
+### Render (Django API)
+
+Configure the Render service with the `backend` directory as its root and use:
+
+- Build command: `pip install -r requirements.txt && python manage.py collectstatic --noinput`
+- Start command: `gunicorn config.wsgi:application`
+- Environment variables:
+  - `DEBUG=False`
+  - `SECRET_KEY` set to a newly generated private value
+  - `JWT_SECRET_KEY` set to a separate private signing value
+  - `ALLOWED_HOSTS=earlyjobs-ats-backend.onrender.com`
+  - `DATABASE_URL` set to the existing Neon PostgreSQL connection string
+  - `CORS_ALLOWED_ORIGINS=https://ats-tracker-7voz.vercel.app`
+  - `CSRF_TRUSTED_ORIGINS=https://ats-tracker-7voz.vercel.app`
+  - `AUTH_COOKIE_SECURE=True`
+
+Run `python manage.py migrate` as a Render pre-deploy command when deploying new migrations. Do not replace the Neon database or run destructive database commands. If introducing or changing `JWT_SECRET_KEY`, existing sessions will need to sign in again.
+
+### Vercel (React frontend)
+
+Set the Vercel project root directory to `frontend` and configure this environment variable for the Production environment:
+
+```text
+VITE_API_BASE_URL=https://earlyjobs-ats-backend.onrender.com/api
+```
+
+Redeploy after changing environment variables; Vite embeds them at build time. The production build also falls back to this API URL if the variable is missing. Local development continues to use `http://localhost:8000/api`.
+
 ## Notes
 
-- This project is in the initial setup phase
-- Candidate management, APIs, and business logic will be added in subsequent phases
+- Candidate and dashboard APIs require an approved, verified user session.
+- The `/api/` index is protected by default; use `/api/health/` for an unauthenticated service check.

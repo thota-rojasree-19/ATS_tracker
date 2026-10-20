@@ -6,8 +6,22 @@ from django.core.validators import validate_email as django_validate_email
 LOCAL_PART_REGEX = re.compile(r'^[a-z0-9._+-]+$')
 
 
+def get_allowed_email_domains() -> list[str]:
+    raw = getattr(settings, 'ALLOWED_EMAIL_DOMAIN', 'earlyjobs.in,admin.com')
+    if isinstance(raw, str):
+        domains = [d.strip().lower() for d in raw.split(',') if d.strip()]
+    elif isinstance(raw, (list, tuple, set)):
+        domains = [str(d).strip().lower() for d in raw if str(d).strip()]
+    else:
+        domains = ['earlyjobs.in']
+    if 'earlyjobs.in' not in domains:
+        domains.append('earlyjobs.in')
+    return domains
+
+
 def get_allowed_email_domain() -> str:
-    return getattr(settings, 'ALLOWED_EMAIL_DOMAIN', 'earlyjobs.in').strip().lower()
+    domains = get_allowed_email_domains()
+    return domains[0] if domains else 'earlyjobs.in'
 
 
 def normalize_email_address(email: str) -> str:
@@ -19,13 +33,12 @@ def normalize_email_address(email: str) -> str:
 def validate_company_email(value: str) -> str:
     """
     Normalize and strictly validate that an email address is a syntactically
-    valid address belonging exclusively to @earlyjobs.in.
-    Rejects lookalike domains (e.g., earlyjobs.in.example.com, sub.earlyjobs.in,
-    notearlyjobs.in), malformed addresses, multiple @ symbols, and non-ASCII tricks.
+    valid address belonging to an authorized company domain.
+    Rejects lookalike domains, malformed addresses, multiple @ symbols, and non-ASCII tricks.
     """
     normalized = normalize_email_address(value)
-    allowed_domain = get_allowed_email_domain()
-    error_msg = f'Only valid @{allowed_domain} company email addresses are allowed.'
+    allowed_domains = get_allowed_email_domains()
+    error_msg = f'Only valid @{" or @".join(allowed_domains)} company email addresses are allowed.'
 
     if not normalized:
         raise ValidationError('Email address is required.')
@@ -51,8 +64,8 @@ def validate_company_email(value: str) -> str:
     if not LOCAL_PART_REGEX.match(local_part):
         raise ValidationError(error_msg)
 
-    # Exact domain match prevents subdomains and suffix/prefix lookalikes
-    if domain_part != allowed_domain:
+    # Exact domain match against allowed domains prevents subdomains and suffix/prefix lookalikes
+    if domain_part not in allowed_domains:
         raise ValidationError(error_msg)
 
     # Run Django's standard validator as an additional check

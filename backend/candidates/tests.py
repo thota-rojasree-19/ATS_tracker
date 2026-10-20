@@ -1,7 +1,12 @@
+from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
+from rest_framework_simplejwt.tokens import RefreshToken
 from .models import Candidate
+
+User = get_user_model()
 
 
 class CandidateModelTests(APITestCase):
@@ -13,7 +18,7 @@ class CandidateModelTests(APITestCase):
             applied_role='Python Developer',
             experience_years=2.5,
             skills=['Python', 'Django'],
-            stage='APPLIED'
+            stage='APPLIED',
         )
         self.assertEqual(c.full_name, 'Alice Smith')
         self.assertEqual(c.email, 'alice@example.com')
@@ -43,6 +48,109 @@ class CandidateModelTests(APITestCase):
         self.assertEqual(c.applied_role, 'Dev')
 
 
+class CandidateAuthorizationTests(APITestCase):
+    """
+    Automated tests verifying that unauthorized requests are blocked
+    and authorized candidate CRUD requests succeed.
+    """
+    def setUp(self):
+        self.list_url = reverse('candidate-list')
+        self.valid_data = {
+            'full_name': 'Jane Doe',
+            'email': 'jane.doe@example.com',
+            'applied_role': 'Backend Developer',
+            'experience_years': 3,
+            'skills': ['Python', 'Postgres'],
+            'stage': 'APPLIED',
+        }
+
+        # Authorized recruiter (verified and approved)
+        self.authorized_user = User.objects.create_user(
+            email='recruiter@earlyjobs.in',
+            password='Password123!',
+            full_name='Lead Recruiter',
+            role=User.ROLE_RECRUITER,
+            is_email_verified=True,
+            approval_status=User.APPROVAL_APPROVED,
+            is_approved=True,
+        )
+
+        # Unapproved user
+        self.unapproved_user = User.objects.create_user(
+            email='unapproved@earlyjobs.in',
+            password='Password123!',
+            full_name='Pending Recruiter',
+            is_email_verified=True,
+            approval_status=User.APPROVAL_PENDING,
+            is_approved=False,
+        )
+
+        # Unverified user
+        self.unverified_user = User.objects.create_user(
+            email='unverified@earlyjobs.in',
+            password='Password123!',
+            full_name='Unverified Recruiter',
+            is_email_verified=False,
+            approval_status=User.APPROVAL_APPROVED,
+            is_approved=True,
+        )
+
+    def test_unauthorized_candidate_list_rejected(self):
+        # Anonymous
+        self.client.credentials()
+        resp = self.client.get(self.list_url)
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_unauthorized_candidate_create_rejected(self):
+        # Anonymous
+        self.client.credentials()
+        resp = self.client.post(self.list_url, self.valid_data, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_unapproved_user_candidate_access_rejected(self):
+        refresh = RefreshToken.for_user(self.unapproved_user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {str(refresh.access_token)}')
+        resp = self.client.get(self.list_url)
+        self.assertIn(resp.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
+
+    def test_unverified_user_candidate_access_rejected(self):
+        refresh = RefreshToken.for_user(self.unverified_user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {str(refresh.access_token)}')
+        resp = self.client.get(self.list_url)
+        self.assertIn(resp.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
+
+    def test_authorized_candidate_crud_lifecycle(self):
+        # Authenticate with authorized user
+        refresh = RefreshToken.for_user(self.authorized_user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {str(refresh.access_token)}')
+
+        # 1. CREATE
+        create_resp = self.client.post(self.list_url, self.valid_data, format='json')
+        self.assertEqual(create_resp.status_code, status.HTTP_201_CREATED)
+        candidate_id = create_resp.data['id']
+        self.assertEqual(create_resp.data['email'], 'jane.doe@example.com')
+
+        # 2. READ (List & Detail)
+        list_resp = self.client.get(self.list_url)
+        self.assertEqual(list_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(list_resp.data['count'], 1)
+
+        detail_url = reverse('candidate-detail', args=[candidate_id])
+        detail_resp = self.client.get(detail_url)
+        self.assertEqual(detail_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(detail_resp.data['full_name'], 'Jane Doe')
+
+        # 3. UPDATE (PUT & PATCH)
+        patch_resp = self.client.patch(detail_url, {'stage': 'INTERVIEW'}, format='json')
+        self.assertEqual(patch_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(patch_resp.data['stage'], 'INTERVIEW')
+
+        # 4. DELETE
+        delete_resp = self.client.delete(detail_url)
+        self.assertEqual(delete_resp.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Candidate.objects.filter(id=candidate_id).exists())
+
+
 class CandidateAPITests(APITestCase):
     def setUp(self):
         self.list_url = reverse('candidate-list')
@@ -52,8 +160,19 @@ class CandidateAPITests(APITestCase):
             'applied_role': 'Backend Developer',
             'experience_years': 3,
             'skills': ['Python', 'Postgres'],
-            'stage': 'APPLIED'
+            'stage': 'APPLIED',
         }
+        self.user = User.objects.create_user(
+            email='recruiter@earlyjobs.in',
+            password='Password123!',
+            full_name='Recruiter Jane',
+            role=User.ROLE_RECRUITER,
+            is_email_verified=True,
+            approval_status=User.APPROVAL_APPROVED,
+            is_approved=True,
+        )
+        refresh = RefreshToken.for_user(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {str(refresh.access_token)}')
 
     def test_list_empty(self):
         resp = self.client.get(self.list_url)
@@ -122,19 +241,31 @@ class CandidateAPITests(APITestCase):
 
 class SearchFilterTests(APITestCase):
     def setUp(self):
+        self.user = User.objects.create_user(
+            email='recruiter@earlyjobs.in',
+            password='Password123!',
+            full_name='Recruiter Jane',
+            role=User.ROLE_RECRUITER,
+            is_email_verified=True,
+            approval_status=User.APPROVAL_APPROVED,
+            is_approved=True,
+        )
+        refresh = RefreshToken.for_user(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {str(refresh.access_token)}')
+
         self.client.post(reverse('candidate-list'), {
             'full_name': 'John Python',
             'email': 'john@python.com',
             'applied_role': 'Python Developer',
             'skills': ['Python', 'FastAPI'],
-            'stage': 'APPLIED'
+            'stage': 'APPLIED',
         }, format='json')
         self.client.post(reverse('candidate-list'), {
             'full_name': 'Jane React',
             'email': 'jane@react.com',
             'applied_role': 'Frontend Developer',
             'skills': ['React', 'TypeScript'],
-            'stage': 'INTERVIEW'
+            'stage': 'INTERVIEW',
         }, format='json')
 
     def test_search_by_name(self):
@@ -187,13 +318,37 @@ class SearchFilterTests(APITestCase):
 
 
 class DashboardTests(APITestCase):
-    def test_empty_dashboard(self):
-        r = self.client.get(reverse('dashboard'))
+    def setUp(self):
+        self.dashboard_url = reverse('dashboard')
+        self.user = User.objects.create_user(
+            email='recruiter@earlyjobs.in',
+            password='Password123!',
+            full_name='Recruiter Jane',
+            role=User.ROLE_RECRUITER,
+            is_email_verified=True,
+            approval_status=User.APPROVAL_APPROVED,
+            is_approved=True,
+        )
+
+    def test_unauthorized_dashboard_access_rejected(self):
+        self.client.credentials()
+        r = self.client.get(self.dashboard_url)
+        self.assertEqual(r.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_authorized_dashboard_access_succeeds(self):
+        refresh = RefreshToken.for_user(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {str(refresh.access_token)}')
+
+        r = self.client.get(self.dashboard_url)
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.data['total_candidates'], 0)
+        self.assertIn('stage_distribution', r.data)
         self.assertEqual(r.data['stage_distribution'][0]['stage'], 'APPLIED')
 
     def test_dashboard_counts(self):
+        refresh = RefreshToken.for_user(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {str(refresh.access_token)}')
+
         self.client.post(reverse('candidate-list'), {
             'full_name': 'A', 'email': 'a@test.com', 'applied_role': 'Dev', 'stage': 'APPLIED'
         }, format='json')
@@ -206,16 +361,52 @@ class DashboardTests(APITestCase):
         self.client.post(reverse('candidate-list'), {
             'full_name': 'D', 'email': 'd@test.com', 'applied_role': 'Dev', 'stage': 'REJECTED'
         }, format='json')
-        r = self.client.get(reverse('dashboard'))
+
+        r = self.client.get(self.dashboard_url)
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.data['total_candidates'], 4)
         self.assertEqual(r.data['interviews'], 1)
         self.assertEqual(r.data['hired'], 1)
         self.assertEqual(r.data['rejected'], 1)
 
+    def test_login_token_supports_candidate_and_dashboard_workflow(self):
+        login_response = self.client.post(
+            reverse('auth-login'),
+            {'email': self.user.email, 'password': 'Password123!'},
+            format='json',
+        )
+        self.assertEqual(login_response.status_code, status.HTTP_200_OK)
+        self.assertIn('access', login_response.data)
+        self.assertIn('refresh', login_response.data)
+
+        auth_scheme = settings.SIMPLE_JWT['AUTH_HEADER_TYPES'][0]
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f'{auth_scheme} {login_response.data["access"]}'
+        )
+        create_response = self.client.post(
+            reverse('candidate-list'),
+            {
+                'full_name': 'Authenticated Candidate',
+                'email': 'authenticated@example.com',
+                'applied_role': 'Full Stack Developer',
+                'stage': 'APPLIED',
+            },
+            format='json',
+        )
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Candidate.objects.count(), 1)
+
+        list_response = self.client.get(reverse('candidate-list'))
+        dashboard_response = self.client.get(self.dashboard_url)
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(list_response.data['count'], 1)
+        self.assertEqual(dashboard_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(dashboard_response.data['total_candidates'], 1)
+
 
 class HealthTests(APITestCase):
-    def test_health(self):
+    def test_health_public(self):
+        self.client.credentials()
         r = self.client.get(reverse('health'))
         self.assertEqual(r.status_code, 200)
         self.assertIn('status', r.data)

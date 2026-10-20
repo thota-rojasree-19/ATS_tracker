@@ -2,10 +2,12 @@ from django.db.models import Count, Q
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
 
+from accounts.permissions import IsVerifiedAndApprovedUser
 from .filters import CandidateFilter
 from .models import Candidate
 from .serializers import CandidateSerializer
@@ -21,6 +23,7 @@ class CandidateViewSet(viewsets.ModelViewSet):
     queryset = Candidate.objects.all()
     serializer_class = CandidateSerializer
     pagination_class = CandidatePagination
+    permission_classes = [IsVerifiedAndApprovedUser]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = CandidateFilter
     search_fields = ['full_name', 'email', 'applied_role', 'skills']
@@ -32,6 +35,8 @@ class CandidateViewSet(viewsets.ModelViewSet):
 
 
 class DashboardAPIView(APIView):
+    permission_classes = [IsVerifiedAndApprovedUser]
+
     def get(self, request):
         total_candidates = Candidate.objects.count()
         in_progress = Candidate.objects.filter(
@@ -66,6 +71,8 @@ class DashboardAPIView(APIView):
 
 
 class HealthAPIView(APIView):
+    permission_classes = [AllowAny]
+
     def get(self, request):
         db_ok = True
         try:

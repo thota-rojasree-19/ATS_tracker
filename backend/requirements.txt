@@ -6,4 +6,5 @@ django-filter
 psycopg[binary]
 python-dotenv
 dj-database-url
+gunicorn
 

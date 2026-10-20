@@ -26,8 +26,60 @@ class OTPValidationError(Exception):
         self.remaining_attempts = remaining_attempts
 
 
+class EmailDeliveryError(Exception):
+    def __init__(self, message="Email delivery service is currently unavailable. Please verify SMTP settings.", code='email_delivery_failed'):
+        super().__init__(message)
+        self.message = message
+        self.code = code
+
+
 def generate_otp_code() -> str:
     return f'{secrets.randbelow(1000000):06d}'
+
+
+def check_smtp_configured() -> bool:
+    backend = getattr(settings, 'EMAIL_BACKEND', '')
+    if 'locmem' in backend or 'console' in backend or getattr(settings, 'TESTING', False):
+        return True
+    host = getattr(settings, 'EMAIL_HOST', '')
+    user = getattr(settings, 'EMAIL_HOST_USER', '')
+    password = getattr(settings, 'EMAIL_HOST_PASSWORD', '')
+    if not host or host == 'smtp.example.com' or not user or not password:
+        return False
+    return True
+
+
+def send_otp_email(user: User, raw_code: str, expiry_minutes: int):
+    if not check_smtp_configured():
+        raise EmailDeliveryError(
+            "Email delivery service is not configured. Missing valid SMTP credentials (EMAIL_HOST, EMAIL_HOST_USER, EMAIL_HOST_PASSWORD) in backend environment.",
+            code="smtp_not_configured"
+        )
+
+    subject = 'Your EarlyJobs.ai ATS Verification Code'
+    message = (
+        f"Hello {user.full_name},\n\n"
+        f"Your verification code for EarlyJobs.ai ATS is: {raw_code}\n\n"
+        f"This code will expire in {expiry_minutes} minutes.\n"
+        f"If you did not request this verification code, please ignore this email.\n\n"
+        f"— EarlyJobs.ai ATS Team"
+    )
+    from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', 'EarlyJobs.ai ATS <no-reply@earlyjobs.in>')
+    try:
+        send_mail(
+            subject=subject,
+            message=message,
+            from_email=from_email,
+            recipient_list=[user.email],
+            fail_silently=False,
+        )
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).error("Failed to send OTP email to %s: %s", user.email, str(exc))
+        raise EmailDeliveryError(
+            "Failed to deliver verification code email. Please verify SMTP credentials and domain sender authorization.",
+            code="email_delivery_failed"
+        )
 
 
 def issue_email_otp(user: User, purpose: str = EmailOTP.PURPOSE_VERIFY_EMAIL, enforce_cooldown: bool = True) -> EmailOTP:
@@ -75,7 +127,12 @@ def issue_email_otp(user: User, purpose: str = EmailOTP.PURPOSE_VERIFY_EMAIL, en
     otp.set_code(raw_code)
     otp.save()
 
-    send_otp_email(user=user, raw_code=raw_code, expiry_minutes=expiry_minutes)
+    try:
+        send_otp_email(user=user, raw_code=raw_code, expiry_minutes=expiry_minutes)
+    except Exception:
+        otp.is_used = True
+        otp.save(update_fields=['is_used'])
+        raise
     return otp
 
 
